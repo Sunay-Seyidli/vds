@@ -13,6 +13,7 @@ jobs:
         shell: powershell
         run: |
           choco install ngrok -y --no-progress
+          ngrok config add-authtoken "${{ secrets.NGROK_AUTH_TOKEN }}"
 
       - name: Enable Remote Desktop
         shell: powershell
@@ -26,27 +27,38 @@ jobs:
       - name: Start Ngrok Tunnel
         shell: powershell
         run: |
-          # Start ngrok in background with authtoken
-          $ngrokJob = Start-Job -ScriptBlock {
-            ngrok tcp 3389 --authtoken "${{ secrets.NGROK_AUTH_TOKEN }}"
+          # Start ngrok in background, capture output to see errors
+          $outputFile = "$env:TEMP\ngrok_out.txt"
+          $errorFile = "$env:TEMP\ngrok_err.txt"
+          
+          Start-Process -FilePath "ngrok" -ArgumentList "tcp 3389" -WindowStyle Hidden -RedirectStandardOutput $outputFile -RedirectStandardError $errorFile
+          
+          # Wait for ngrok to start
+          Start-Sleep -Seconds 15
+          
+          # Check if ngrok process is running
+          $ngrokProcess = Get-Process -Name "ngrok" -ErrorAction SilentlyContinue
+          if (-not $ngrokProcess) {
+            Write-Output "Ngrok process not found. Output: $(Get-Content $outputFile -ErrorAction SilentlyContinue)"
+            Write-Output "Errors: $(Get-Content $errorFile -ErrorAction SilentlyContinue)"
+            exit 1
           }
           
-          # Wait longer for tunnel to establish
-          Start-Sleep -Seconds 20
+          Write-Output "Ngrok is running (PID: $($ngrokProcess.Id))"
           
-          # Retry API call with error handling
-          $maxRetries = 5
+          # Retry API call
+          $maxRetries = 10
           $retryCount = 0
           $tunnels = $null
           
-          while ($retryCount -lt $maxRetries -and -not $tunnels) {
+          while ($retryCount -lt $maxRetries) {
             try {
               $tunnels = Invoke-RestMethod -Uri "http://localhost:4040/api/tunnels" -ErrorAction Stop
               break
             } catch {
               $retryCount++
               Write-Output "Retry $retryCount/$maxRetries..."
-              Start-Sleep -Seconds 10
+              Start-Sleep -Seconds 5
             }
           }
           
@@ -55,7 +67,8 @@ jobs:
               Write-Output "Tunnel URL: $($tunnel.public_url)"
             }
           } else {
-            Write-Output "Could not get tunnel URL, but ngrok is running. Check ngrok dashboard."
+            Write-Output "Could not get tunnel URL from API. Ngrok may still be working."
+            Write-Output "Check ngrok dashboard: https://dashboard.ngrok.com/tunnels/agents"
           }
           
           # Keep workflow alive
