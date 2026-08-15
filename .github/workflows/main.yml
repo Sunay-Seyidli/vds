@@ -1,12 +1,36 @@
-- name: Auth
-  run: .\ngrok\ngrok.exe authtoken $Env:NGROK_AUTH_TOKEN
-  env:
-    NGROK_AUTH_TOKEN: ${{ secrets.NGROK_AUTH_TOKEN }}
-- name: Enable TS
-  run: Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server'-name "fDenyTSConnections" -Value 0
-  run: Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
-  run: Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -name "UserAuthentication" -Value 1
-  run: Set-LocalUser -Name "runneradmin" -Password (ConvertTo-SecureString -AsPlainText "P@ssword!" -Force)
-- name: Create Tunnel
-  run: .\ngrok\ngrok.exe tcp 3389
-  
+name: Setup RDP with Ngrok
+
+on:
+  workflow_dispatch:
+
+jobs:
+  rdp-setup:
+    runs-on: windows-latest
+    timeout-minutes: 360
+
+    steps:
+      - name: Install Ngrok
+        shell: powershell
+        run: |
+          choco install ngrok -y --no-progress
+          ngrok config add-authtoken "${{ secrets.NGROK_AUTH_TOKEN }}"
+
+      - name: Enable Remote Desktop
+        shell: powershell
+        run: |
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
+          Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 1
+          $securePassword = ConvertTo-SecureString -AsPlainText "P@ssword!" -Force
+          Set-LocalUser -Name "runneradmin" -Password $securePassword
+
+      - name: Start Ngrok Tunnel
+        shell: powershell
+        run: |
+          Start-Process -FilePath "ngrok" -ArgumentList "tcp 3389" -WindowStyle Hidden
+          Start-Sleep -Seconds 10
+          $tunnels = Invoke-RestMethod -Uri "http://localhost:4040/api/tunnels"
+          foreach ($tunnel in $tunnels.tunnels) {
+            Write-Output "Tunnel URL: $($tunnel.public_url)"
+          }
+          while ($true) { Start-Sleep -Seconds 60 }
